@@ -1,81 +1,281 @@
 
-import { useEffect, useRef } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import type { Tool } from "../types";
 
-type PixelViewProps = {
+export type PixelViewProps = {
   width?: number;
   height?: number;
   pixelSize?: number;
+  tool: Tool;
+  paintColor: string;
+  toolSize: number;
+  onPickColor?: (color: string) => void;
+  onActivate?: () => void;
 };
 
-export default function PixelView({
-  width = 32,
-  height = 32,
-  pixelSize = 16,
-}: PixelViewProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+export type PixelViewHandle = {
+  undo: () => void;
+  redo: () => void;
+};
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
+const CHECKER_SIZE = 8;
 
-    if (!canvas || !ctx) return;
+const PixelView = forwardRef<PixelViewHandle, PixelViewProps>(
+  function PixelView(
+    {
+      width = 32,
+      height = 32,
+      pixelSize = 16,
+      tool,
+      paintColor,
+      toolSize,
+      onPickColor,
+      onActivate,
+    },
+    ref
+  ) {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const paintingRef = useRef(false);
+    const lastIndexRef = useRef(-1);
+    const changedStrokeRef = useRef(false);
 
-    canvas.width = width * pixelSize;
-    canvas.height = height * pixelSize;
+    const [pixels, setPixels] = useState<string[]>(
+      () => Array(width * height).fill("")
+    );
 
-    // Raw pixel view: transparent pixels over a checkerboard.
-    const checkerSize = 8;
+    const pixelsRef = useRef(pixels);
+    const historyRef = useRef<string[][]>([[...pixels]]);
+    const historyIndexRef = useRef(0);
 
-    for (let y = 0; y < canvas.height; y += checkerSize) {
-      for (let x = 0; x < canvas.width; x += checkerSize) {
-        ctx.fillStyle =
-          (Math.floor(x / checkerSize) +
-            Math.floor(y / checkerSize)) %
-            2 ===
-          0
-            ? "#f1f5f9"
-            : "#cbd5e1";
+    const canvasWidth = width * pixelSize;
+    const canvasHeight = height * pixelSize;
 
-        ctx.fillRect(x, y, checkerSize, checkerSize);
+    const drawCell = useCallback(
+      (ctx: CanvasRenderingContext2D, index: number, color: string) => {
+        const x = (index % width) * pixelSize;
+        const y = Math.floor(index / width) * pixelSize;
+
+        if (color) {
+          ctx.fillStyle = color;
+          ctx.fillRect(x, y, pixelSize, pixelSize);
+          return;
+        }
+
+        for (let cy = y; cy < y + pixelSize; cy += CHECKER_SIZE) {
+          for (let cx = x; cx < x + pixelSize; cx += CHECKER_SIZE) {
+            const even =
+              (Math.floor(cx / CHECKER_SIZE) +
+                Math.floor(cy / CHECKER_SIZE)) %
+                2 ===
+              0;
+
+            ctx.fillStyle = even ? "#f1f5f9" : "#cbd5e1";
+            ctx.fillRect(
+              cx,
+              cy,
+              Math.min(CHECKER_SIZE, x + pixelSize - cx),
+              Math.min(CHECKER_SIZE, y + pixelSize - cy)
+            );
+          }
+        }
+      },
+      [width, pixelSize]
+    );
+
+    const redrawCanvas = useCallback(
+      (source: string[]) => {
+        const canvas = canvasRef.current;
+        const ctx = canvas?.getContext("2d", { alpha: false });
+        if (!canvas || !ctx) return;
+
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        ctx.imageSmoothingEnabled = false;
+
+        for (let y = 0; y < canvasHeight; y += CHECKER_SIZE) {
+          for (let x = 0; x < canvasWidth; x += CHECKER_SIZE) {
+            const even =
+              (Math.floor(x / CHECKER_SIZE) +
+                Math.floor(y / CHECKER_SIZE)) %
+                2 ===
+              0;
+
+            ctx.fillStyle = even ? "#f1f5f9" : "#cbd5e1";
+            ctx.fillRect(
+              x,
+              y,
+              Math.min(CHECKER_SIZE, canvasWidth - x),
+              Math.min(CHECKER_SIZE, canvasHeight - y)
+            );
+          }
+        }
+
+        source.forEach((color, index) => {
+          if (color) drawCell(ctx, index, color);
+        });
+      },
+      [canvasWidth, canvasHeight, drawCell]
+    );
+
+    useEffect(() => {
+      redrawCanvas(pixels);
+    }, [pixels, redrawCanvas]);
+
+    const applyHistory = useCallback((index: number) => {
+      const snapshot = historyRef.current[index];
+      if (!snapshot) return;
+
+      const restored = [...snapshot];
+      historyIndexRef.current = index;
+      pixelsRef.current = restored;
+      setPixels(restored);
+    }, []);
+
+    const undo = useCallback(() => {
+      if (historyIndexRef.current > 0) {
+        applyHistory(historyIndexRef.current - 1);
       }
-    }
+    }, [applyHistory]);
 
-    // Example pixel data; empty cells are transparent.
-    const pixels = new Map<string, string>([
-      ["15,8", "#ef4444"],
-      ["16,8", "#ef4444"],
-      ["14,9", "#ef4444"],
-      ["15,9", "#ef4444"],
-      ["16,9", "#ef4444"],
-      ["17,9", "#ef4444"],
-      ["15,10", "#2563eb"],
-      ["16,10", "#2563eb"],
-    ]);
+    const redo = useCallback(() => {
+      if (historyIndexRef.current < historyRef.current.length - 1) {
+        applyHistory(historyIndexRef.current + 1);
+      }
+    }, [applyHistory]);
 
-    for (const [key, color] of pixels) {
-      const [x, y] = key.split(",").map(Number);
+    useImperativeHandle(ref, () => ({ undo, redo }), [undo, redo]);
 
-      ctx.fillStyle = color;
-      ctx.fillRect(
-        x * pixelSize,
-        y * pixelSize,
-        pixelSize,
-        pixelSize
+    const getPixelIndex = (
+      e: ReactPointerEvent<HTMLCanvasElement>
+    ) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+
+      const x = Math.floor(
+        ((e.clientX - rect.left) / rect.width) * width
       );
-    }
-  }, [width, height, pixelSize]);
+      const y = Math.floor(
+        ((e.clientY - rect.top) / rect.height) * height
+      );
 
-  return (
-    <div className="flex h-full w-full min-h-0 min-w-0 items-center justify-center overflow-auto bg-background p-4">
-      <canvas
-        ref={canvasRef}
-        className="max-w-full"
-        style={{
-          imageRendering: "pixelated",
-          width: width * pixelSize,
-          height: height * pixelSize,
-        }}
-      />
-    </div>
-  );
-}
+      if (x < 0 || x >= width || y < 0 || y >= height) return -1;
+      return y * width + x;
+    };
+
+    const paintAt = (index: number) => {
+      if (index < 0 || index === lastIndexRef.current) return;
+      lastIndexRef.current = index;
+
+      const ctx = canvasRef.current?.getContext("2d", { alpha: false });
+      if (!ctx) return;
+
+      const centerX = index % width;
+      const centerY = Math.floor(index / width);
+      const size = Math.max(1, Math.floor(toolSize));
+      const startX = centerX - Math.floor((size - 1) / 2);
+      const startY = centerY - Math.floor((size - 1) / 2);
+      const nextColor = tool === "erase" ? "" : paintColor;
+
+      for (let by = startY; by < startY + size; by++) {
+        for (let bx = startX; bx < startX + size; bx++) {
+          if (bx < 0 || bx >= width || by < 0 || by >= height) {
+            continue;
+          }
+
+          const cellIndex = by * width + bx;
+          if (pixelsRef.current[cellIndex] === nextColor) continue;
+
+          // Mutate the ref during the stroke; don't copy the whole array
+          // for every cell. Commit one snapshot when the stroke ends.
+          pixelsRef.current[cellIndex] = nextColor;
+          drawCell(ctx, cellIndex, nextColor);
+          changedStrokeRef.current = true;
+        }
+      }
+    };
+
+    const finishStroke = () => {
+      if (!paintingRef.current) return;
+
+      paintingRef.current = false;
+      lastIndexRef.current = -1;
+
+      if (changedStrokeRef.current) {
+        const snapshot = [...pixelsRef.current];
+        const history = historyRef.current.slice(
+          0,
+          historyIndexRef.current + 1
+        );
+
+        history.push(snapshot);
+
+        // Limit history so long sessions don't grow memory forever.
+        if (history.length > 100) history.shift();
+
+        historyRef.current = history;
+        historyIndexRef.current = history.length - 1;
+        pixelsRef.current = snapshot;
+        setPixels(snapshot);
+      }
+
+      changedStrokeRef.current = false;
+    };
+
+    const handlePointerDown = (
+      e: ReactPointerEvent<HTMLCanvasElement>
+    ) => {
+      onActivate?.();
+
+      const index = getPixelIndex(e);
+      if (index < 0) return;
+
+      if (tool === "eyedropper") {
+        const picked = pixelsRef.current[index];
+        if (picked) onPickColor?.(picked);
+        return;
+      }
+
+      e.currentTarget.setPointerCapture(e.pointerId);
+      paintingRef.current = true;
+      lastIndexRef.current = -1;
+      changedStrokeRef.current = false;
+      paintAt(index);
+    };
+
+    return (
+      <div className="flex h-full w-full min-h-0 min-w-0 items-center justify-center overflow-hidden bg-background p-4">
+        <canvas
+          ref={canvasRef}
+          aria-label="Pixel art view"
+          tabIndex={0}
+          className="block outline-none"
+          style={{
+            width: canvasWidth,
+            height: canvasHeight,
+            maxWidth: "100%",
+            maxHeight: "100%",
+            aspectRatio: `${width} / ${height}`,
+            imageRendering: "pixelated",
+            touchAction: "none",
+          }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={(e) => {
+            if (paintingRef.current) paintAt(getPixelIndex(e));
+          }}
+          onPointerUp={finishStroke}
+          onPointerCancel={finishStroke}
+          onLostPointerCapture={finishStroke}
+        />
+      </div>
+    );
+  }
+);
+
+export default PixelView;

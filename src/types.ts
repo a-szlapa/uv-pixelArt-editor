@@ -1,0 +1,1 @@
+export type Tool = "draw" | "erase" | "eyedropper";
