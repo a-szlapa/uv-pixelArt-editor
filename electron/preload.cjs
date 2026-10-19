@@ -1,8 +1,14 @@
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 
-// Expose a small, explicit API here when the renderer needs native capabilities.
-// Keep Node.js and Electron APIs out of the React renderer.
 contextBridge.exposeInMainWorld("desktop", {
   platform: process.platform,
-  getAppName: () => ""
+  getAppName: () => "Pixel Editor",
+
+  importReference: () => ipcRenderer.invoke("dialog:import-reference"),
+
+  onMenuAction: (callback) => {
+    const listener = (_event, action) => callback(action);
+    ipcRenderer.on("menu-action", listener);
+    return () => ipcRenderer.removeListener("menu-action", listener);
+  },
 });
