@@ -1,9 +1,10 @@
+
 const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 
 const isDev = !app.isPackaged;
-let mainWindow;
+let mainWindow = null;
 
 function sendMenuAction(action) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -17,9 +18,18 @@ function createMenu() {
       label: "File",
       submenu: [
         {
-          label: "Import Reference Image…",
-          accelerator: "CmdOrCtrl+O",
-          click: () => sendMenuAction("import-reference"),
+          label: "Import",
+          submenu: [
+            {
+              label: "Reference PNG…",
+              accelerator: "CmdOrCtrl+O",
+              click: () => sendMenuAction("import-reference"),
+            },
+            {
+              label: "Anim Strip…",
+              click: () => sendMenuAction("import-anim-strip"),
+            },
+          ],
         },
         { type: "separator" },
         { role: "close", label: "Close Window" },
@@ -74,35 +84,40 @@ function createMenu() {
     { role: "editMenu" },
     { role: "windowMenu" },
   ];
+
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-ipcMain.handle("dialog:import-reference", async () => {
-  if (!mainWindow) return null;
+async function readPngDialog(title) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return null;
+  }
+
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: "Import Reference Image",
+    title,
     properties: ["openFile"],
-    filters: [
-      { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] },
-    ],
+    filters: [{ name: "PNG Images", extensions: ["png"] }],
   });
-  if (result.canceled || !result.filePaths[0]) return null;
+
+  if (result.canceled || !result.filePaths[0]) {
+    return null;
+  }
 
   const filePath = result.filePaths[0];
-  const extension = path.extname(filePath).toLowerCase();
-  const mimeTypes = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
-    ".bmp": "image/bmp",
-  };
   const bytes = await fs.readFile(filePath);
+
   return {
     name: path.basename(filePath),
-    dataUrl: `data:${mimeTypes[extension] || "application/octet-stream"};base64,${bytes.toString("base64")}`,
+    dataUrl: `data:image/png;base64,${bytes.toString("base64")}`,
   };
+}
+
+ipcMain.handle("dialog:import-reference", async () => {
+  return readPngDialog("Import Reference PNG");
+});
+
+ipcMain.handle("dialog:import-anim-strip", async () => {
+  return readPngDialog("Import Animation Strip");
 });
 
 function createWindow() {
@@ -135,11 +150,16 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
+
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
   });
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
 });

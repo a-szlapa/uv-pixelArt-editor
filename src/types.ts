@@ -9,3 +9,9 @@ export type ReferenceImage = {
   name: string;
   dataUrl: string;
 };
+
+export type AnimationFrame = {
+  width: number;
+  height: number;
+  pixels: string[];
+};

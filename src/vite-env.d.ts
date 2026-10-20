@@ -2,6 +2,7 @@
 
 type DesktopMenuAction =
   | "import-reference"
+  | "import-anim-strip"
   | "resize-left"
   | "resize-right"
   | "zoom-left-in"
@@ -15,7 +16,11 @@ interface Window {
   desktop?: {
     platform: string;
     getAppName: () => string;
-    importReference: () => Promise<{ name: string; dataUrl: string } | null>;
+    importReference: () => Promise<{name: string; dataUrl: string} | null>;
     onMenuAction: (callback: (action: DesktopMenuAction) => void) => () => void;
+    importAnimStrip: () => Promise<{
+      name: string;
+      dataUrl: string;
+    } | null>;
   };
 }
